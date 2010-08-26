@@ -1,0 +1,204 @@
+<?php
+define('UC_RESTRICT_BUY_MESSAGE_1', t('You don\'t have permission to buy %product or you haven\'t logged in.')); //U vas nedostatochno prav dlja pokupki %product ili vy ne voshli v sistemu.
+
+/**
+ * Implementation of hook_perm().
+ */
+function uc_restrict_buy_perm() {
+  return array('is can buy');
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function uc_restrict_buy_form_alter(&$form, &$form_state, $form_id) {
+  global $user; 
+
+  if ($form_id == 'node_type_form' && isset($form['identity']['type'])) {
+
+  }elseif (isset($form['type']) && isset($form['#node']) && ($form_id == $form['type']['#value'] .'_node_form')) {       
+    if(!uc_product_is_product($form['#node']->type)) return;
+        
+    if (!$user->uid) {
+      return;
+    }
+
+    //$nid = !empty($form['nid']['#value']) ? $form['nid']['#value'] : NULL;
+    $form['buy_role_restrict'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Buy restrict'),
+      '#description' => t('These settings apply to the roles and permisions in the node editing form.'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE, //empty($field['allowed_values_php']),
+    );
+    
+    $form['buy_role_restrict']['restrict_buy'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Select access'),
+      '#description' => t('Select restrict option.'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE, //empty($field['allowed_values_php']),
+    );
+
+    $form['buy_role_restrict']['restrict_buy']['restrict_type'] =  array(
+      '#type' => 'radios',
+      '#options' => array('none' => t('None'), 'role' => t('Role'), 'perm' => t('Permissions')),
+      '#default_value' => $form['#node']->restrict_type,
+    );
+    
+    $form['buy_role_restrict']['restrict_message'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Set message'),
+      '#default_value' => $form['#node']->restrict_message,
+      '#size' => 2,
+      '#maxlength' => 255,
+      '#description' => t('Restrict message.'),
+      '#weight' => 4,
+    );
+  
+    uc_restrict_buy_role_options_form($form, $form_state);
+    uc_restrict_buy_perm_options_form($form, $form_state);
+    
+  }
+  // elseif($form_id == 'uc_cart_view_form'){
+  //  $form['#validate'][] = 'uc_restrict_buy_validate';  
+  // }
+}
+
+//function uc_restrict_buy_validate($form, &$form_state){
+//  return FALSE;
+//}
+
+/**
+ * Implementation of hook_nodeapi().
+ */
+function uc_restrict_buy_nodeapi(&$node, $op, $teaser, $page) {
+    switch ($op) {
+      case 'load':
+          list($data, $message) = uc_restrict_buy_get($node->nid);
+          $node->restrict_type = $data['type'];
+          $restrict_type = 'restrict_' . $node->restrict_type;
+          $node->$restrict_type = $data['data'];
+          $node->restrict_message = $message;
+        break;
+
+      //case 'validate':
+      //  break;
+      case 'insert':
+      case 'update':
+          $restrict_type = 'restrict_' . $node->restrict_type;
+          $data['data'] = isset($node->$restrict_type) ? $node->$restrict_type : array();          
+          $data['type'] = $node->restrict_type;                                  
+          uc_restrict_buy_save($node->nid, $node->restrict_type, $data, $node->restrict_message);
+        break;
+
+      //case 'delete revision':
+
+        //break;
+
+      case 'delete':
+          uc_restrict_buy_remove($node->nid);
+        break;
+  }
+}
+  
+function uc_restrict_buy_get_roles() {
+  static $roles = NULL;
+  if (!isset($roles)) {
+    $roles = array();
+    $result = db_query("SELECT r.rid, r.name FROM {role} r ORDER BY r.name");
+    while ($obj = db_fetch_object($result)) {
+      $roles[$obj->rid] = $obj->name;
+    }
+  }
+
+  return $roles;
+}
+
+function uc_restrict_buy_role_options_form(&$form, &$form_state) {
+  $form['buy_role_restrict']['restrict_role'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Role'),
+    '#options' => uc_restrict_buy_get_roles(),
+    '#description' => t('Only the checked roles will be able to access this display. Note that users with "access all views" can see any view, regardless of role.'),
+  );
+  if (!empty($form['#node']->restrict_role)){
+    $form['buy_role_restrict']['restrict_role']['#default_value'] = $form['#node']->restrict_role;
+  }
+}
+
+function uc_restrict_buy_perm_options_form(&$form, &$form_state) {
+  $perms = array();
+  // Get list of permissions
+  foreach (module_list(FALSE, FALSE, TRUE) as $module) {
+    if ($permissions = module_invoke($module, 'perm')) {
+      $perms[$module] = drupal_map_assoc($permissions);
+    }
+  }
+  $form['buy_role_restrict']['restrict_perm'] = array(
+    '#type' => 'select',
+    '#options' => $perms,
+    '#title' => t('Permission'),
+    '#description' => t('Only users with the selected permission flag will be able to access this display. Note that users with "access all views" can see any view, regardless of other permissions.'),
+  );
+  if (!empty($form['#node']->restrict_perm)){
+    $form['buy_role_restrict']['restrict_perm']['#default_value'] = $form['#node']->restrict_perm;
+  }
+}
+
+function uc_restrict_buy_save($nid, $type='none', $data, $message){
+  if(!@db_result(@db_query("SELECT nid FROM {uc_restrict_buy} WHERE nid = %d", $nid))){  
+    return @db_query("INSERT INTO {uc_restrict_buy} (nid, type, data, message) VALUES (%d, '%s', '%s', '%s')", $nid, $type, serialize($data), $message);
+  }else{ 
+    return @db_query("UPDATE {uc_restrict_buy} SET type = '%s', data = '%s', message = '%s' WHERE nid = %d", $type, serialize($data), $message, $nid);
+  }
+}
+
+function uc_restrict_buy_remove($nid){
+  return db_query("DELETE FROM {uc_restrict_buy} WHERE nid = %d", $nid); 
+}
+
+function uc_restrict_buy_get($nid){
+  $result = @db_fetch_array(@db_query("SELECT `data`, `message` FROM {uc_restrict_buy} WHERE `nid` = %d", $nid));
+  $data = unserialize($result['data']);
+  if(is_array($data)) return array($data, $result['message']);
+  //return FALSE;
+}
+
+function uc_restrict_buy_check_buy($node){
+  global $user;
+    
+  $type = $node->restrict_type;
+  if(!$type || $type == 'none') return TRUE; // не активно
+  
+  $restrict_type = 'restrict_' . $node->restrict_type;
+  
+  $data = $node->$restrict_type;
+  
+  $return = TRUE;  
+  $restrict_buy_check = 'uc_restrict_buy_check_' . $node->restrict_type;
+  if(function_exists(restrict_buy_check))
+  $return = call_user_func_array($restrict_buy_check, $node->$restrict_type);
+
+  if(!$return){
+    $message = $node->restrict_message;
+    if(!$message) $message = UC_RESTRICT_BUY_MESSAGE_1;
+    drupal_set_message(t($message, array('%product' => $node->title)), 'warning', FALSE); 
+  }
+
+  return $return;
+}
+
+function uc_restrict_buy_check_roles($rids, $account = NULL) {
+  global $user;
+  if (empty($account)) $account = $user;
+  $roles = array_keys($account->roles);
+  $roles[] = $account->uid ? DRUPAL_AUTHENTICATED_RID : DRUPAL_ANONYMOUS_RID;
+  return array_intersect(array_filter($rids), $roles);
+}
+
+function uc_restrict_buy_check_perm($perm, $account = NULL) {
+  global $user;
+  if (empty($account)) $account = $user;
+  return user_access($perm, $account);
+}
