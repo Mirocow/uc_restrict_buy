@@ -59,6 +59,8 @@ function uc_restrict_buy_form_alter(&$form, &$form_state, $form_id) {
     uc_restrict_buy_role_options_form($form, $form_state);
     uc_restrict_buy_perm_options_form($form, $form_state);
     
+  }elseif($form_id == 'uc_cart_checkout_form'){
+    array_unshift($form['#validate'], 'uc_restrict_buy_check_buy_validate');
   }
   // elseif($form_id == 'uc_cart_view_form'){
   //  $form['#validate'][] = 'uc_restrict_buy_validate';  
@@ -165,7 +167,7 @@ function uc_restrict_buy_get($nid){
   //return FALSE;
 }
 
-function uc_restrict_buy_check_buy($node){
+function uc_restrict_buy_check_buy($node, $croak = FALSE){
   global $user;
     
   $type = $node->restrict_type;
@@ -177,24 +179,47 @@ function uc_restrict_buy_check_buy($node){
   
   $return = TRUE;  
   $restrict_buy_check = 'uc_restrict_buy_check_' . $node->restrict_type;
-  if(function_exists(restrict_buy_check))
-  $return = call_user_func_array($restrict_buy_check, $node->$restrict_type);
-
-  if(!$return){
+  if(function_exists($restrict_buy_check))
+  $return = call_user_func_array($restrict_buy_check, array($node->$restrict_type));
+  
+  if(!$return && $croak){
     $message = $node->restrict_message;
     if(!$message) $message = UC_RESTRICT_BUY_MESSAGE_1;
-    drupal_set_message(t($message, array('%product' => $node->title)), 'warning', FALSE); 
+    $message = t($message, array('%product' => $node->title));
+    drupal_set_message($message, 'warning', FALSE);
   }
 
   return $return;
 }
 
-function uc_restrict_buy_check_roles($rids, $account = NULL) {
+/**
+ * Implementation of hook_add_to_cart().
+ */
+function uc_restrict_buy_add_to_cart($nid, $qty, $data) {
+  $node = node_load($nid);
+  if(!uc_restrict_buy_check_buy($node, TRUE)){
+    $message = $node->restrict_message;
+    if(!$message) $message = UC_RESTRICT_BUY_MESSAGE_1;
+    return $return = array(array('success' => FALSE, 'message' => t($message, array('%product' => $node->title))));
+  }
+}
+
+function uc_restrict_buy_check_buy_validate(&$form, $form_state){
+  $products = uc_cart_get_contents();
+  foreach($products as $product){
+    $node = node_load($product->nid);
+    uc_restrict_buy_check_buy($node, TRUE);
+  }
+}
+
+function uc_restrict_buy_check_role($rids, $account = NULL) {
   global $user;
   if (empty($account)) $account = $user;
+  if(!is_array($rids)) $_rids[] = $rids;
+  else $_rids = $rids;
   $roles = array_keys($account->roles);
   $roles[] = $account->uid ? DRUPAL_AUTHENTICATED_RID : DRUPAL_ANONYMOUS_RID;
-  return array_intersect(array_filter($rids), $roles);
+  return array_intersect(array_filter($_rids), $roles);
 }
 
 function uc_restrict_buy_check_perm($perm, $account = NULL) {
